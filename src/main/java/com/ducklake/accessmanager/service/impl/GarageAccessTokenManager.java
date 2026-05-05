@@ -181,22 +181,31 @@ public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
         String bucketId = getBucketId(bucketName);
         grantBucketPermission(bucketId, created.accessKeyId(), allowWrite);
 
-        // Extract pgUsername from key name format "key-{bucket}|{pgUsername}"
-        String pgUsername = keyName.contains("|") ? keyName.split("\\|", 2)[1] : null;
+        // Key name format: "key-{bucket}|{pgUsername}|{permission}"
+        String[] parts = keyName.split("\\|", 3);
+        String pgUsername = parts.length > 1 ? parts[1] : null;
         String permission = allowWrite ? "readwrite" : "read";
         return new AccessKey(created.accessKeyId(), created.secretAccessKey(), bucketName, permission, garageEndpoint, garageRegion, pgUsername);
     }
 
-    // Parses a ListKeys item, extracting pgUsername from the key name if embedded
+    // Parses a ListKeys item. Key name format: "key-{bucket}|{pgUsername}|{permission}"
+    // Handles old format without permission field for backwards compatibility.
     private AccessKey parseKeyItem(GarageKeyListItem item) {
-        String name = item.name() != null ? item.name() : "";
+        String raw = item.name() != null ? item.name() : "";
         String pgUsername = null;
-        if (name.contains("|")) {
-            String[] parts = name.split("\\|", 2);
-            name = parts[0];
-            pgUsername = parts[1];
+        String permission = null;
+        String bucketName = raw;
+
+        if (raw.contains("|")) {
+            String[] parts = raw.split("\\|", 3);
+            bucketName = parts[0];
+            pgUsername = parts.length > 1 ? parts[1] : null;
+            permission = parts.length > 2 ? parts[2] : null;
         }
-        return new AccessKey(item.id(), null, name, null, garageEndpoint, garageRegion, pgUsername);
+
+        if (bucketName.startsWith("key-")) bucketName = bucketName.substring(4);
+
+        return new AccessKey(item.id(), null, bucketName, permission, garageEndpoint, garageRegion, pgUsername);
     }
 
     // Step 1: POST /v2/CreateKey – creates the key and returns accessKeyId + secretAccessKey

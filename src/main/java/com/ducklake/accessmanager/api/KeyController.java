@@ -98,7 +98,7 @@ public class KeyController {
             default -> database.createReadOnlyUser();
         };
 
-        String keyName = "key-" + request.bucketName() + "|" + dbCreds.username();
+        String keyName = "key-" + request.bucketName() + "|" + dbCreds.username() + "|" + request.permission();
         AccessKey s3Key = switch (request.permission()) {
             case "readwrite" -> objectStore.createReadWriteKey(request.bucketName(), keyName);
             default -> objectStore.createReadOnlyKey(request.bucketName(), keyName);
