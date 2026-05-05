@@ -413,8 +413,8 @@ mvn spring-boot:run
 ```bash
 # Använd alltid en ny versionstagg — överskrivning av befintlig tag
 # triggar INTE ny pull om noden har den cachad (imagePullPolicy: IfNotPresent)
-docker build --network=host -t ghcr.io/wildrelation/ducklake-access-manager:v6 .
-docker push ghcr.io/wildrelation/ducklake-access-manager:v6
+docker build --network=host -t ghcr.io/wildrelation/ducklake-access-manager:v7 .
+docker push ghcr.io/wildrelation/ducklake-access-manager:v7
 ```
 
 Uppdatera sedan image-taggen i cbhcloud-deploymentet till den nya versionen.
@@ -607,6 +607,18 @@ garage bucket create <bucket-namn>
 **Orsak:** Kubernetes standard-`imagePullPolicy` är `IfNotPresent` — om imagen med given tag redan finns cachad på noden dras den inte om, även om en ny version pushats med samma tag. Att pusha `:v3` igen gav inte en ny pull.
 
 **Lösning:** Använd en ny tag för varje release (`:v4`, `:v5` osv.) istället för att överskriva befintlig tag. Alternativt sätt `imagePullPolicy: Always` i deployment-manifestet och kör `kubectl rollout restart deployment/<namn>`.
+
+---
+
+### My Keys visar fel bucket-namn och fel behörighet (v6 och tidigare)
+
+**Symptom:** Bucket-kolumnen i My Keys visar `key-ducklake` istället för `ducklake`. Permission-kolumnen visar alltid "Read-only", även för readwrite-nycklar.
+
+**Orsak (bugg 1 — bucket-namn):** `parseKeyItem` i `GarageAccessTokenManager` strippade inte `key-`-prefixet från nyckelnamnet. Nyckelnamn har formatet `key-{bucket}|{pgUsername}` men bara delen efter `|` parsades, inte prefixet.
+
+**Orsak (bugg 2 — permission):** Garage `ListKeys` returnerar inte behörighetsnivå per nyckel. `parseKeyItem` returnerade alltid `null` för `permission`, vilket fick UI:t att alltid visa "Read-only".
+
+**Lösning (v7+):** Nyckelnamnsformatet utökades till `key-{bucket}|{pgUsername}|{permission}`. `parseKeyItem` strippar nu `key-`-prefixet och läser permission ur det tredje fältet. Gamla nycklar utan permission-fält hanteras bakåtkompatibelt (visas som null/"Read-only").
 
 ---
 
