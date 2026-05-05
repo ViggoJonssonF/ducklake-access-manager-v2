@@ -12,5 +12,6 @@ public record KeyListItem(
     String endpoint,
     String region,
     String pgUsername,
-    String createdBy
+    String createdBy,
+    String createdAt
 ) {}

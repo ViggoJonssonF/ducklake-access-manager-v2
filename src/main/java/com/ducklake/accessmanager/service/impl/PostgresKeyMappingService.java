@@ -67,6 +67,22 @@ public class PostgresKeyMappingService implements KeyMappingService {
     }
 
     @Override
+    public Map<String, String> findCreatedAts(List<String> keyIds) {
+        if (keyIds.isEmpty()) return Map.of();
+        String placeholders = String.join(",", Collections.nCopies(keyIds.size(), "?"));
+        List<Map<String, Object>> rows = jdbc.queryForList(
+            "SELECT garage_key_id, created_at FROM key_user_mapping WHERE garage_key_id IN (" + placeholders + ")",
+            keyIds.toArray()
+        );
+        Map<String, String> result = new HashMap<>();
+        for (Map<String, Object> row : rows) {
+            Object ts = row.get("created_at");
+            result.put((String) row.get("garage_key_id"), ts != null ? ts.toString() : null);
+        }
+        return result;
+    }
+
+    @Override
     public void deleteMapping(String garageKeyId) {
         jdbc.update("DELETE FROM key_user_mapping WHERE garage_key_id = ?", garageKeyId);
     }

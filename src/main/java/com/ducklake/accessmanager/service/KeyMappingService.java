@@ -17,5 +17,7 @@ public interface KeyMappingService {
     List<String> findKeyIdsForUser(String keycloakUser);
     /** Returns a map of garageKeyId → display_name for the given key IDs. */
     Map<String, String> findDisplayNames(List<String> keyIds);
+    /** Returns a map of garageKeyId → created_at (ISO string) for the given key IDs. */
+    Map<String, String> findCreatedAts(List<String> keyIds);
     void deleteMapping(String garageKeyId);
 }

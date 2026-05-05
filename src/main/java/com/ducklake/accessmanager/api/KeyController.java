@@ -133,12 +133,14 @@ public class KeyController {
 
         List<String> keyIds = visibleKeys.stream().map(AccessKey::keyId).toList();
         Map<String, String> displayNames = keyMapping.findDisplayNames(keyIds);
+        Map<String, String> createdAts   = keyMapping.findCreatedAts(keyIds);
 
         List<KeyListItem> result = visibleKeys.stream()
             .map(k -> new KeyListItem(
                 k.keyId(), k.secretKey(), k.bucketName(), k.permission(),
                 k.endpoint(), k.region(), k.pgUsername(),
-                displayNames.get(k.keyId())
+                displayNames.get(k.keyId()),
+                createdAts.get(k.keyId())
             ))
             .toList();
 
