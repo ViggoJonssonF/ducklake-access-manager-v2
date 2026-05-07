@@ -57,13 +57,17 @@ else
     echo "${STATUS}" | jq . >&2 || echo "${STATUS}" >&2
     exit 1
   fi
+  # Garage v1 /v1/layout expects an array of role assignments — not a
+  # map keyed by node id (the prior version returned 400 with "expected a
+  # sequence"). Each element is {id, zone, capacity, tags}.
+  ROLE_BODY="[{\"id\":\"${NODE_ID}\",\"zone\":\"dc1\",\"capacity\":1073741824,\"tags\":[\"local\"]}]"
   echo "[bootstrap] assigning role to node ${NODE_ID}"
   curl -fsS -X POST -H "${AUTH}" -H "${JSON}" \
-    -d "{\"${NODE_ID}\":{\"zone\":\"dc1\",\"capacity\":1073741824,\"tags\":[\"local\"]}}" \
+    -d "${ROLE_BODY}" \
     "${ADMIN}/v1/layout" >/dev/null || {
     echo "[bootstrap] FAIL: /v1/layout (assign role) errored" >&2
     curl -v -X POST -H "${AUTH}" -H "${JSON}" \
-      -d "{\"${NODE_ID}\":{\"zone\":\"dc1\",\"capacity\":1073741824,\"tags\":[\"local\"]}}" \
+      -d "${ROLE_BODY}" \
       "${ADMIN}/v1/layout" 2>&1 | head -40 >&2
     exit 1
   }
