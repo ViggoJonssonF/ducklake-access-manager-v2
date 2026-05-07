@@ -23,18 +23,32 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Implements {@link ObjectStoreAccessTokenManager} against the Garage Admin API v2.
+ * Implements {@link ObjectStoreAccessTokenManager} against the Garage Admin API v1.
  *
- * Used in production on cbhcloud. Communicates with the Admin API via the nginx proxy
- * in ducklake-garage (port 3900), which forwards /v2/* to the internal port 3903.
- * Authenticates with a Bearer token (GARAGE_ADMIN_TOKEN).
+ * The original v0 of this class targeted the v2 admin API (RPC-style POST endpoints
+ * like /v2/ListBuckets, /v2/CreateBucket). Those endpoints don't exist in
+ * dxflrs/garage:v1.0.1 — Garage answers `400 InvalidRequest: Unknown API endpoint`.
+ * The v1 admin API is the documented stable surface across all Garage 0.9+ /
+ * 1.0.x releases, so we use that instead. It also matches what the local
+ * `garage-bootstrap` script uses, so the whole stack speaks one API version.
  *
- * Key creation flow:
- *   1. POST /v2/CreateKey       → creates the key, returns accessKeyId + secretAccessKey
- *   2. GET  /v2/GetBucketInfo   → resolves the bucket ID from its name (globalAlias)
- *   3. POST /v2/AllowBucketKey  → grants the key access to the bucket with the given permissions
+ * Reference: https://garagehq.deuxfleurs.fr/api/garage-admin-v1.html
  *
- * API reference: https://garagehq.deuxfleurs.fr/api/garage-admin-v2.html
+ * Path / method differences vs v2:
+ *
+ *   v2                             v1
+ *   ─────────────────────────────  ─────────────────────────────────────────
+ *   GET  /v2/ListBuckets           GET    /v1/bucket?list
+ *   POST /v2/CreateBucket          POST   /v1/bucket
+ *   POST /v2/DeleteBucket?id=…     DELETE /v1/bucket?id=…
+ *   GET  /v2/GetBucketInfo?…       GET    /v1/bucket?globalAlias=…
+ *   GET  /v2/ListKeys              GET    /v1/key?list
+ *   POST /v2/CreateKey             POST   /v1/key
+ *   POST /v2/DeleteKey?id=…        DELETE /v1/key?id=…
+ *   POST /v2/AllowBucketKey        POST   /v1/bucket/allow
+ *
+ * JSON shapes are identical for the fields we read — Garage uses camelCase across
+ * both API versions and our DTOs are tagged with @JsonIgnoreProperties(ignoreUnknown=true).
  */
 @Service
 public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
@@ -60,46 +74,36 @@ public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
         this.garageRegion = garageRegion;
     }
 
-    /**
-     * Creates a read-only key for a specific bucket.
-     * Steps: CreateKey → GetBucketInfo → AllowBucketKey (read: true, write: false)
-     */
     @Override
     public AccessKey createReadOnlyKey(String bucketName, String keyName) {
         return createKey(bucketName, keyName, false);
     }
 
-    /**
-     * Creates a read/write key for a specific bucket.
-     * Steps: CreateKey → GetBucketInfo → AllowBucketKey (read: true, write: true)
-     */
     @Override
     public AccessKey createReadWriteKey(String bucketName, String keyName) {
         return createKey(bucketName, keyName, true);
     }
 
     /**
-     * Permanently deletes a key.
-     * Uses POST /v2/DeleteKey?id={keyId} — the Garage Admin API v2 is RPC-style (POST for all
-     * operations), but DeleteKey takes the key ID as a query parameter, not in the request body.
+     * DELETE /v1/key?id={keyId}
      */
     @Override
     public void deleteKey(String keyId) {
-        restTemplate.postForObject(
-            adminApiUrl + "/v2/DeleteKey?id=" + keyId,
+        restTemplate.exchange(
+            adminApiUrl + "/v1/key?id=" + keyId,
+            HttpMethod.DELETE,
             new HttpEntity<>(authHeaders()),
             Void.class
         );
     }
 
     /**
-     * Lists all keys registered in Garage.
-     * Uses GET /v2/ListKeys — returns id and name per key (secretAccessKey is not available after creation).
+     * GET /v1/key?list — returns an array of {id, name}.
      */
     @Override
     public List<AccessKey> listKeys() {
         ResponseEntity<GarageKeyListItem[]> response = restTemplate.exchange(
-            adminApiUrl + "/v2/ListKeys",
+            adminApiUrl + "/v1/key?list",
             HttpMethod.GET,
             new HttpEntity<>(authHeaders()),
             GarageKeyListItem[].class
@@ -113,13 +117,13 @@ public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
     }
 
     /**
-     * Lists all Garage buckets that have a global alias, sorted by name.
-     * Uses GET /v2/ListBuckets. Re-uses the GarageBucketResponse record (id + globalAliases).
+     * GET /v1/bucket?list — returns an array of {id, globalAliases[], localAliases[]}.
+     * Filter to buckets that have at least one global alias (those are the ones we manage).
      */
     @Override
     public List<Bucket> listBuckets() {
         ResponseEntity<GarageBucketResponse[]> response = restTemplate.exchange(
-            adminApiUrl + "/v2/ListBuckets",
+            adminApiUrl + "/v1/bucket?list",
             HttpMethod.GET,
             new HttpEntity<>(authHeaders()),
             GarageBucketResponse[].class
@@ -134,38 +138,44 @@ public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
     }
 
     /**
-     * Deletes a bucket from Garage by its global alias.
-     * Resolves the bucket ID via GetBucketInfo, then calls POST /v2/DeleteBucket.
-     * The bucket must be empty; Garage returns an error otherwise.
+     * DELETE /v1/bucket?id={bucketId}. The bucket must be empty;
+     * Garage returns an error otherwise — propagated up so callers can surface
+     * a 409 to the UI.
      */
     @Override
     public void deleteBucket(String bucketName) {
         String bucketId = getBucketId(bucketName);
-        restTemplate.postForObject(
-            adminApiUrl + "/v2/DeleteBucket?id=" + bucketId,
+        restTemplate.exchange(
+            adminApiUrl + "/v1/bucket?id=" + bucketId,
+            HttpMethod.DELETE,
             new HttpEntity<>(authHeaders()),
-            Object.class
+            Void.class
         );
         log.info("Garage bucket deleted: {}", bucketName);
     }
 
     /**
-     * Creates a bucket in Garage with the given global alias.
-     * Uses POST /v2/CreateBucket. If the bucket already exists Garage returns 400 — we swallow it.
+     * POST /v1/bucket with body {"globalAlias": "<name>"}.
+     *
+     * If the bucket already exists Garage returns 409 — we swallow that as
+     * idempotent. The previous v2 implementation also caught 400 here, but that
+     * was a workaround for a different error and masked real bugs (an unknown
+     * endpoint also returned 400 and was silently treated as "already exists").
+     * With v1 we only catch the genuine conflict status.
      */
     @Override
     public void createBucket(String bucketName) {
         log.info("Creating Garage bucket: {}", bucketName);
         try {
             restTemplate.postForObject(
-                adminApiUrl + "/v2/CreateBucket",
+                adminApiUrl + "/v1/bucket",
                 new HttpEntity<>(Map.of("globalAlias", bucketName), authHeaders()),
                 Object.class
             );
             log.info("Garage bucket created: {}", bucketName);
         } catch (org.springframework.web.client.HttpClientErrorException e) {
-            if (e.getStatusCode().value() == 409 || e.getStatusCode().value() == 400) {
-                log.info("Garage bucket already exists ({}): {}", e.getStatusCode().value(), bucketName);
+            if (e.getStatusCode().value() == 409) {
+                log.info("Garage bucket already exists: {}", bucketName);
             } else {
                 log.error("Failed to create Garage bucket {}: {} {}", bucketName, e.getStatusCode(), e.getResponseBodyAsString());
                 throw e;
@@ -175,7 +185,6 @@ public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
 
     // --- Private helpers ---
 
-    // Shared logic for creating a key with optional write permission
     private AccessKey createKey(String bucketName, String keyName, boolean allowWrite) {
         GarageKeyResponse created = postCreateKey(keyName);
         String bucketId = getBucketId(bucketName);
@@ -188,7 +197,7 @@ public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
         return new AccessKey(created.accessKeyId(), created.secretAccessKey(), bucketName, permission, garageEndpoint, garageRegion, pgUsername);
     }
 
-    // Parses a ListKeys item. Key name format: "key-{bucket}|{pgUsername}|{permission}"
+    // Parses a ListKeys item. Key name format: "key-{bucket}|{pgUsername}|{permission}".
     // Handles old format without permission field for backwards compatibility.
     private AccessKey parseKeyItem(GarageKeyListItem item) {
         String raw = item.name() != null ? item.name() : "";
@@ -208,21 +217,21 @@ public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
         return new AccessKey(item.id(), null, bucketName, permission, garageEndpoint, garageRegion, pgUsername);
     }
 
-    // Step 1: POST /v2/CreateKey – creates the key and returns accessKeyId + secretAccessKey
+    /** POST /v1/key — body {"name": "..."}. Response carries accessKeyId + secretAccessKey. */
     private GarageKeyResponse postCreateKey(String keyName) {
         HttpEntity<Map<String, Object>> request = new HttpEntity<>(
             Map.of("name", keyName),
             authHeaders()
         );
-        GarageKeyResponse created = restTemplate.postForObject(adminApiUrl + "/v2/CreateKey", request, GarageKeyResponse.class);
+        GarageKeyResponse created = restTemplate.postForObject(adminApiUrl + "/v1/key", request, GarageKeyResponse.class);
         if (created == null) throw new IllegalStateException("Garage CreateKey returned null");
         return created;
     }
 
-    // Step 2: GET /v2/GetBucketInfo?globalAlias={bucketName} – resolves the bucket ID
+    /** GET /v1/bucket?globalAlias={bucketName} — returns the bucket's full record incl. id. */
     private String getBucketId(String bucketName) {
         ResponseEntity<GarageBucketResponse> response = restTemplate.exchange(
-            adminApiUrl + "/v2/GetBucketInfo?globalAlias=" + bucketName,
+            adminApiUrl + "/v1/bucket?globalAlias=" + bucketName,
             HttpMethod.GET,
             new HttpEntity<>(authHeaders()),
             GarageBucketResponse.class
@@ -232,7 +241,7 @@ public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
         return bucket.id();
     }
 
-    // Step 3: POST /v2/AllowBucketKey – grants the key access to the bucket with the given permissions
+    /** POST /v1/bucket/allow — grants the key read/write/owner perms on the bucket. */
     private void grantBucketPermission(String bucketId, String accessKeyId, boolean allowWrite) {
         Map<String, Object> body = Map.of(
             "bucketId", bucketId,
@@ -244,14 +253,12 @@ public class GarageAccessTokenManager implements ObjectStoreAccessTokenManager {
             )
         );
         restTemplate.postForObject(
-            adminApiUrl + "/v2/AllowBucketKey",
+            adminApiUrl + "/v1/bucket/allow",
             new HttpEntity<>(body, authHeaders()),
             Object.class
         );
     }
 
-    // Builds HTTP headers for Admin API calls.
-    // Bearer token is only added if GARAGE_ADMIN_TOKEN is configured.
     private HttpHeaders authHeaders() {
         HttpHeaders headers = new HttpHeaders();
         if (adminToken != null && !adminToken.isBlank()) {
