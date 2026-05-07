@@ -1,0 +1,35 @@
+# Garage local-dev configuration.
+#
+# Single-node setup with replication_factor=1. NEVER deploy this layout in
+# production — secrets are hard-coded and there is no replica.
+#
+# Container paths only — bound to docker-managed volumes in compose.local.yaml.
+
+metadata_dir = "/var/lib/garage/meta"
+data_dir     = "/var/lib/garage/data"
+db_engine    = "lmdb"
+
+replication_factor = 1
+
+# RPC secret: 64 hex chars, used for inter-node and CLI auth. Keep stable
+# across restarts so the cluster identity persists in the volume.
+rpc_secret      = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+rpc_bind_addr   = "[::]:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+[s3_api]
+s3_region     = "garage"
+api_bind_addr = "[::]:3900"
+root_domain   = ".s3.garage.localhost"
+
+[s3_web]
+bind_addr   = "[::]:3902"
+root_domain = ".web.garage.localhost"
+index       = "index.html"
+
+[admin]
+api_bind_addr = "[::]:3903"
+# These tokens are sent in `Authorization: Bearer <token>` to the Admin API.
+# Local-dev only — generate fresh ones for any deployed environment.
+admin_token   = "local-dev-garage-admin-token"
+metrics_token = "local-dev-metrics-token"

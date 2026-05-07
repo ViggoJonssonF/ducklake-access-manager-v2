@@ -40,8 +40,11 @@
 const { useState, useEffect, useCallback } = React;
 
 /* ── Auth ── */
-const KEYCLOAK_BASE = 'https://iam.cloud.cbh.kth.se/realms/cloud/protocol/openid-connect';
-const CLIENT_ID     = 'ducklake';
+// Defaults preserve production behaviour. Overridden at startup from
+// /api/config so the same bundle works against any environment (KTH cloud,
+// local docker compose, …) without rebuilding.
+let KEYCLOAK_BASE = 'https://iam.cloud.cbh.kth.se/realms/cloud/protocol/openid-connect';
+let CLIENT_ID     = 'ducklake';
 const REDIRECT_URI  = window.location.origin + '/';
 
 function genVerifier() { const a = new Uint8Array(32); crypto.getRandomValues(a); return btoa(String.fromCharCode(...a)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,''); }
@@ -635,7 +638,19 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// Bootstrap: pull KEYCLOAK_BASE / CLIENT_ID from the backend, then mount.
+// If /api/config is unreachable we fall back to the production defaults
+// declared above, keeping legacy behaviour intact.
+fetch('/api/config')
+  .then(r => r.ok ? r.json() : null)
+  .then(cfg => {
+    if (cfg && cfg.keycloakBase) KEYCLOAK_BASE = cfg.keycloakBase;
+    if (cfg && cfg.clientId)     CLIENT_ID     = cfg.clientId;
+  })
+  .catch(() => { /* fall back to defaults */ })
+  .finally(() => {
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  });
 </script>
 </body>
 </html>

@@ -1,0 +1,139 @@
+# Local development stack for ducklake-access-manager-v2.
+#
+# Spins up Keycloak, Postgres, Garage, a one-shot Garage bootstrap, and the
+# access-manager itself. Browser-facing URLs (Keycloak, Garage S3, Postgres
+# public host in DuckDB scripts) all use `localhost:<port>` so the same
+# config works whether the browser lives on the host or anything reaches
+# back through `localhost:8080`.
+#
+# Start:    docker compose -f compose.local.yaml up --build
+# Stop:     docker compose -f compose.local.yaml down
+# Reset:    docker compose -f compose.local.yaml down -v   (drops volumes!)
+#
+# Login:    open http://localhost:8080
+#           admin@local / admin     (has 'admin' client role on `ducklake`)
+#           student@local / student (no admin role)
+
+services:
+
+  # ── Keycloak ─────────────────────────────────────────────────────────
+  # Mirrors KTH's iam.cloud.cbh.kth.se for local dev. The realm/client
+  # config is imported from local/keycloak/realm-cloud.json on first start.
+  # KC_HOSTNAME is pinned to `localhost:8081` so the `iss` claim in tokens
+  # matches what Spring expects after we set `issuer-uri` to the same value.
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: "8081"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_PROXY_HEADERS: "xforwarded"
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./local/keycloak:/opt/keycloak/data/import:ro
+      - keycloak_data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/cloud/.well-known/openid-configuration HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # ── Postgres (DuckLake catalog) ───────────────────────────────────────
+  # Holds: (a) per-dataset DuckLake catalog tables, (b) access-manager's
+  # own bookkeeping tables (key_user_mapping, dataset_grants, groups, …).
+  # The init.sql installs the pgcrypto extension we need for gen_random_uuid().
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ducklake
+      POSTGRES_USER: ducklake
+      POSTGRES_PASSWORD: ducklake
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./local/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ducklake -d ducklake"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ── Garage (S3-compatible object store) ───────────────────────────────
+  # 3900 = S3 API (browser/clients), 3903 = Admin API (access-manager only).
+  # rpc/admin secrets are hard-coded local-dev values — never ship these.
+  garage:
+    image: dxflrs/garage:v1.0.1
+    volumes:
+      - ./local/garage/garage.toml:/etc/garage.toml:ro
+      - garage_meta:/var/lib/garage/meta
+      - garage_data:/var/lib/garage/data
+    ports:
+      - "3900:3900"   # S3 API
+      - "3903:3903"   # Admin API
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- --header='Authorization: Bearer local-dev-garage-admin-token' http://localhost:3903/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+
+  # ── Garage bootstrap (one-shot) ───────────────────────────────────────
+  # First time only: assigns layout to the single Garage node and creates
+  # a `demo-dataset` bucket so the UI has something to show. Idempotent:
+  # detects existing layout/bucket and skips.
+  garage-bootstrap:
+    image: alpine:3.19
+    depends_on:
+      garage:
+        condition: service_healthy
+    volumes:
+      - ./local/garage/bootstrap.sh:/bootstrap.sh:ro
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
+    restart: "no"
+
+  # ── Access Manager ────────────────────────────────────────────────────
+  # The Spring Boot app under /src. Built from the repo's existing
+  # Dockerfile. SPRING_PROFILES_ACTIVE=local picks up the override
+  # properties that point Keycloak validation at localhost:8081.
+  access-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      keycloak:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      garage-bootstrap:
+        condition: service_completed_successfully
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      PORT: "8080"
+      # Postgres
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ducklake
+      POSTGRES_ADMIN_USER: ducklake
+      POSTGRES_ADMIN_PASSWORD: ducklake
+      POSTGRES_PUBLIC_HOST: localhost   # what we bake into DuckDB scripts
+      # Keycloak — issuer-uri matches the `iss` claim that Keycloak emits
+      KEYCLOAK_ISSUER_URI: http://localhost:8081/realms/cloud
+      # Garage
+      GARAGE_ADMIN_URL: http://garage:3903
+      GARAGE_ADMIN_TOKEN: local-dev-garage-admin-token
+      GARAGE_S3_ENDPOINT: localhost:3900
+      GARAGE_S3_REGION: garage
+    ports:
+      - "8080:8080"
+
+volumes:
+  keycloak_data:
+  postgres_data:
+  garage_meta:
+  garage_data:
