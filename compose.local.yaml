@@ -37,8 +37,11 @@ services:
     volumes:
       - ./local/keycloak:/opt/keycloak/data/import:ro
       - keycloak_data:/opt/keycloak/data
+    # /dev/tcp + HTTP/1.1 with explicit Host header. The previous HTTP/1.0
+    # variant tripped a Keycloak NPE (`requestHost is null`) because the
+    # hostname provider expects a Host header to be present.
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && echo -e 'GET /realms/cloud/.well-known/openid-configuration HTTP/1.0\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/8080 && printf 'GET /realms/cloud/.well-known/openid-configuration HTTP/1.1\\r\\nHost: localhost:8081\\r\\nConnection: close\\r\\n\\r\\n' >&3 && head -1 <&3 | grep -q '200'"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -54,8 +57,12 @@ services:
       POSTGRES_DB: ducklake
       POSTGRES_USER: ducklake
       POSTGRES_PASSWORD: ducklake
+    # Mapped to 5433 on the host to avoid colliding with any other local
+    # Postgres (Docker Desktop, system postgres, an existing ducklake stack).
+    # Inside the docker network everything still reaches it on `postgres:5432`
+    # so application config does not need to change.
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./local/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
@@ -77,12 +84,11 @@ services:
     ports:
       - "3900:3900"   # S3 API
       - "3903:3903"   # Admin API
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- --header='Authorization: Bearer local-dev-garage-admin-token' http://localhost:3903/health || exit 1"]
-      interval: 5s
-      timeout: 5s
-      retries: 30
-      start_period: 10s
+    # No in-container healthcheck — the dxflrs/garage image is built from
+    # `scratch` and has no shell, so there is no command we can run inside
+    # it. The garage-bootstrap container does its own polling against the
+    # Admin API and only completes once Garage is actually responsive,
+    # which is what the access-manager waits on (service_completed_successfully).
 
   # ── Garage bootstrap (one-shot) ───────────────────────────────────────
   # First time only: assigns layout to the single Garage node and creates
@@ -92,7 +98,10 @@ services:
     image: alpine:3.19
     depends_on:
       garage:
-        condition: service_healthy
+        # Garage has no in-container healthcheck (scratch image), so we
+        # only wait for the process to start. bootstrap.sh polls the
+        # Admin API itself and tolerates the brief warm-up window.
+        condition: service_started
     volumes:
       - ./local/garage/bootstrap.sh:/bootstrap.sh:ro
     entrypoint: ["/bin/sh", "/bootstrap.sh"]
