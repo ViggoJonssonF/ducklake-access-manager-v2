@@ -24,13 +24,19 @@ public class PostgresKeyMappingService implements KeyMappingService {
                 created_at    TIMESTAMP DEFAULT NOW()
             )
         """);
+        // Added in Phase 3: track which per-dataset Postgres DB the key's PG
+        // user lives in. Older rows (created before this migration) keep the
+        // column null, and KeyController falls back to the shared `ducklake`
+        // DB for those during cleanup.
+        jdbc.execute("ALTER TABLE key_user_mapping ADD COLUMN IF NOT EXISTS pg_database VARCHAR");
     }
 
     @Override
-    public void saveMapping(String garageKeyId, String keycloakSub, String displayName) {
+    public void saveMapping(String garageKeyId, String keycloakSub, String displayName, String pgDatabase) {
         jdbc.update(
-            "INSERT INTO key_user_mapping (garage_key_id, keycloak_sub, display_name) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-            garageKeyId, keycloakSub, displayName
+            "INSERT INTO key_user_mapping (garage_key_id, keycloak_sub, display_name, pg_database) " +
+            "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+            garageKeyId, keycloakSub, displayName, pgDatabase
         );
     }
 
@@ -38,6 +44,15 @@ public class PostgresKeyMappingService implements KeyMappingService {
     public String findOwner(String garageKeyId) {
         List<String> rows = jdbc.queryForList(
             "SELECT keycloak_sub FROM key_user_mapping WHERE garage_key_id = ?",
+            String.class, garageKeyId
+        );
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    @Override
+    public String findDatabase(String garageKeyId) {
+        List<String> rows = jdbc.queryForList(
+            "SELECT pg_database FROM key_user_mapping WHERE garage_key_id = ?",
             String.class, garageKeyId
         );
         return rows.isEmpty() ? null : rows.get(0);

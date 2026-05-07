@@ -4,40 +4,38 @@ import com.ducklake.accessmanager.model.DbCredentials;
 import java.util.List;
 
 /**
- * Manages creation and deletion of PostgreSQL users with the appropriate permissions.
+ * Manages creation and deletion of PostgreSQL users with per-database scope.
  *
- * Implemented by {@link com.ducklake.accessmanager.service.impl.PostgresAccessTokenManager}
- * via JDBC. Users are created dynamically with random passwords and named with the
- * prefix "dl_ro_" (read-only) or "dl_rw_" (read/write).
+ * Each generated user is granted access to exactly one database — the per-dataset
+ * Postgres DB created by {@link com.ducklake.accessmanager.service.impl.DatasetService}.
+ * This means a user with access to dataset A literally cannot SELECT against
+ * dataset B's catalog tables, since they have no CONNECT privilege there.
+ *
+ * Implemented by
+ * {@link com.ducklake.accessmanager.service.impl.PostgresAccessTokenManager}.
  */
 public interface DatabaseAccessTokenManager {
 
     /**
-     * Creates a PostgreSQL user with SELECT-only permission on all tables.
-     *
-     * @return {@link DbCredentials} with username, password, and connection details
+     * Creates a PostgreSQL user with read-only access to the given database.
+     * Steps: CREATE USER → GRANT CONNECT on the target db → (in-target-db)
+     * GRANT USAGE on schema public → GRANT SELECT on all current and future tables.
      */
-    DbCredentials createReadOnlyUser();
+    DbCredentials createReadOnlyUser(String database);
 
     /**
-     * Creates a PostgreSQL user with SELECT, INSERT, UPDATE, and DELETE permission.
-     * Should only be called for privileged users.
-     *
-     * @return {@link DbCredentials} with username, password, and connection details
+     * Creates a PostgreSQL user with read/write access to the given database.
+     * Adds CREATE on schema public so DuckLake can bootstrap its catalog tables
+     * on the first {@code ATTACH 'ducklake:postgres:dbname=…'} call.
      */
-    DbCredentials createReadWriteUser();
+    DbCredentials createReadWriteUser(String database);
 
     /**
-     * Deletes a PostgreSQL user and revokes all its privileges.
-     *
-     * @param username the username to delete
+     * Revokes the user's privileges in {@code database} and drops them
+     * cluster-wide. Idempotent on missing users.
      */
-    void deleteUser(String username);
+    void deleteUser(String username, String database);
 
-    /**
-     * Lists all dynamically created users (those with the "dl_" prefix).
-     *
-     * @return list of usernames
-     */
+    /** Lists all dynamically created users (those with the "dl_" prefix). */
     List<String> listUsers();
 }
