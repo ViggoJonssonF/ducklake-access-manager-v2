@@ -1,6 +1,7 @@
 package com.ducklake.accessmanager.service.impl;
 
 import com.ducklake.accessmanager.model.BucketGrant;
+import com.ducklake.accessmanager.model.Grant;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -185,11 +186,71 @@ public class AccessService {
         );
     }
 
+    // ── Generalized CRUD (user / group / everyone) ─────────────────────────
+
+    /**
+     * Lists every grant regardless of principal type, newest first within bucket.
+     */
+    public List<Grant> listAllGrants() {
+        return jdbc.query(
+            "SELECT principal_type, principal_id, bucket_name, granted_at " +
+            "FROM dataset_grants ORDER BY bucket_name, principal_type, principal_id",
+            this::mapGrant
+        );
+    }
+
+    public List<Grant> listGrantsForBucket(String bucketName) {
+        return jdbc.query(
+            "SELECT principal_type, principal_id, bucket_name, granted_at " +
+            "FROM dataset_grants WHERE bucket_name = ? " +
+            "ORDER BY principal_type, principal_id",
+            this::mapGrant, bucketName
+        );
+    }
+
+    public void grantGroup(String groupName, String bucketName) {
+        jdbc.update(
+            "INSERT INTO dataset_grants (bucket_name, principal_type, principal_id) " +
+            "VALUES (?, 'group', ?) ON CONFLICT DO NOTHING",
+            bucketName, groupName
+        );
+    }
+
+    public void grantEveryone(String bucketName) {
+        jdbc.update(
+            "INSERT INTO dataset_grants (bucket_name, principal_type, principal_id) " +
+            "VALUES (?, 'everyone', ?) ON CONFLICT DO NOTHING",
+            bucketName, EVERYONE_ID
+        );
+    }
+
+    /**
+     * Generic revoke. {@code principalId} is ignored when type is {@code everyone}
+     * (there is only one row per bucket for everyone, identified by the {@code "*"} marker).
+     */
+    public void revoke(String principalType, String principalId, String bucketName) {
+        String id = TYPE_EVERYONE.equals(principalType) ? EVERYONE_ID : principalId;
+        jdbc.update(
+            "DELETE FROM dataset_grants " +
+            "WHERE bucket_name = ? AND principal_type = ? AND principal_id = ?",
+            bucketName, principalType, id
+        );
+    }
+
     private BucketGrant mapBucketGrant(ResultSet rs, int i) throws SQLException {
         return new BucketGrant(
             rs.getString("student_email"),
             rs.getString("bucket_name"),
             rs.getTimestamp("granted_at").toLocalDateTime()
+        );
+    }
+
+    private Grant mapGrant(ResultSet rs, int i) throws SQLException {
+        return new Grant(
+            rs.getString("principal_type"),
+            rs.getString("principal_id"),
+            rs.getString("bucket_name"),
+            rs.getTimestamp("granted_at").toLocalDateTime().toString()
         );
     }
 }

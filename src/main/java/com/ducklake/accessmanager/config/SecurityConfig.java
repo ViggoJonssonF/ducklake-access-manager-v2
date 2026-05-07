@@ -24,6 +24,7 @@ public class SecurityConfig {
                 .requestMatchers("/api/admin/**").authenticated()
                 .requestMatchers("/api/buckets").authenticated()
                 .requestMatchers("/api/datasets/**").authenticated()
+                .requestMatchers("/api/groups/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/keys").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/keys/generate").authenticated()
                 .requestMatchers(HttpMethod.DELETE, "/api/keys/**").authenticated()
