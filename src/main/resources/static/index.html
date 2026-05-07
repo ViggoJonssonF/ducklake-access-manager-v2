@@ -349,183 +349,397 @@ function KeysPage({ token, admin }) {
 
 /* ── AdminPage ── */
 function AdminPage({ token }) {
-  const [tab, setTab]           = useState('buckets');
-  const [buckets, setBuckets]   = useState([]);
-  const [grants, setGrants]     = useState([]);
-  const [bLoading, setBLoading] = useState(true);
-  const [gLoading, setGLoading] = useState(false);
-  const [newName, setNewName]   = useState('');
-  const [adding, setAdding]     = useState(false);
-  const [gEmail, setGEmail]     = useState('');
-  const [gBucketName, setGBucketName] = useState('');
-  const [granting, setGranting] = useState(false);
-  const [search, setSearch]     = useState('');
+  const [tab, setTab] = useState('datasets');
+  const tabStyle = active => ({ padding:'7px 16px', borderRadius:6, fontSize:13, fontWeight: active ? 500 : 400, color: active ? 'var(--fg)' : 'var(--fg2)', background: active ? 'var(--surface2)' : 'transparent', border:'none', cursor:'pointer', fontFamily:'var(--sans)', display:'flex', alignItems:'center', gap:6 });
+  return (
+    <div>
+      <h1 style={{ fontSize:20, fontWeight:600, marginBottom:24 }}>Admin</h1>
+      <div style={{ display:'flex', gap:4, marginBottom:28, background:'var(--surface)', borderRadius:8, padding:4, width:'fit-content', border:'1px solid var(--border)' }}>
+        <button style={tabStyle(tab==='datasets')} onClick={() => setTab('datasets')}><Icon name="bucket" size={14} /> Datasets</button>
+        <button style={tabStyle(tab==='groups')}   onClick={() => setTab('groups')}><Icon name="users" size={14} /> Groups</button>
+        <button style={tabStyle(tab==='grants')}   onClick={() => setTab('grants')}><Icon name="key" size={14} /> Grants</button>
+      </div>
+      {tab === 'datasets' && <DatasetsAdmin token={token} />}
+      {tab === 'groups'   && <GroupsAdmin token={token} />}
+      {tab === 'grants'   && <GrantsAdmin token={token} />}
+    </div>
+  );
+}
+
+/* ── DatasetsAdmin ── */
+function DatasetsAdmin({ token }) {
+  const [list, setList]         = useState([]);
+  const [loading, setLoading]   = useState(true);
+  const [bucketName, setBucket] = useState('');
+  const [title, setTitle]       = useState('');
+  const [description, setDesc]  = useState('');
+  const [visibility, setVis]    = useState('private');
+  const [creating, setCreating] = useState(false);
 
   const authFetch = useCallback((url, opts={}) =>
     fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${token}` } }), [token]);
 
-  const loadBuckets = useCallback(async () => {
-    const res = await authFetch('/api/admin/buckets');
-    if (res.ok) setBuckets(await res.json());
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await authFetch('/api/datasets');
+    if (res.ok) setList(await res.json());
+    setLoading(false);
   }, [authFetch]);
+  useEffect(() => { load(); }, [load]);
 
-  const loadGrants = useCallback(async (email='') => {
-    setGLoading(true);
-    const url = email ? `/api/admin/grants?email=${encodeURIComponent(email)}` : '/api/admin/grants';
-    const res = await authFetch(url);
-    if (res.ok) setGrants(await res.json());
-    setGLoading(false);
-  }, [authFetch]);
-
-  useEffect(() => { loadBuckets().finally(() => setBLoading(false)); }, [loadBuckets]);
-  useEffect(() => { if (tab === 'grants') loadGrants(); }, [tab, loadGrants]);
-
-  const handleAddBucket = async () => {
-    if (!newName.trim()) return;
-    setAdding(true);
+  const handleCreate = async () => {
+    if (!bucketName.trim() || !title.trim()) return;
+    setCreating(true);
     try {
-      const res = await authFetch('/api/admin/buckets', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name: newName.trim() }) });
+      const res = await authFetch('/api/datasets', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ bucketName: bucketName.trim(), title: title.trim(), description: description.trim() || null, visibility })
+      });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || `HTTP ${res.status}`); }
-      setNewName('');
-      await loadBuckets();
+      setBucket(''); setTitle(''); setDesc(''); setVis('private');
+      await load();
     } catch (e) { alert('Error: ' + e.message); }
-    finally { setAdding(false); }
+    finally { setCreating(false); }
   };
 
-  const handleDeleteBucket = async (name) => {
-    if (!window.confirm(`Permanently delete bucket "${name}" from Garage? This cannot be undone.`)) return;
+  const handleToggleVis = async (d) => {
+    const next = d.visibility === 'public' ? 'private' : 'public';
+    await authFetch(`/api/datasets/${encodeURIComponent(d.bucketName)}`, {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ visibility: next })
+    });
+    await load();
+  };
+
+  const handleDelete = async (d) => {
+    if (!window.confirm(`Permanently delete dataset "${d.title}"? Bucket and Postgres database (${d.pgDatabase}) will be dropped.`)) return;
     try {
-      const res = await authFetch(`/api/admin/buckets/${encodeURIComponent(name)}`, { method:'DELETE' });
-      if (!res.ok) {
-        const e = await res.json().catch(() => ({}));
-        throw new Error(e.message || `HTTP ${res.status}`);
-      }
-      await loadBuckets();
+      const res = await authFetch(`/api/datasets/${encodeURIComponent(d.bucketName)}`, { method:'DELETE' });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || `HTTP ${res.status}`); }
+      await load();
     } catch (e) { alert('Error: ' + e.message); }
   };
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+      <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, padding:24 }}>
+        <div style={{ fontSize:13, fontWeight:600, marginBottom:16 }}>Create Dataset</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+          <div>
+            <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Bucket Name</label>
+            <input value={bucketName} onChange={e => setBucket(e.target.value)} placeholder="titanic-2026" style={{ ...inputStyle, fontFamily:'var(--mono)' }} onFocus={focusAccent} onBlur={blurBorder} />
+          </div>
+          <div>
+            <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Title</label>
+            <input value={title} onChange={e => setTitle(e.target.value)} placeholder="Titanic Survivors" style={inputStyle} onFocus={focusAccent} onBlur={blurBorder} />
+          </div>
+        </div>
+        <div style={{ marginBottom:12 }}>
+          <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Description</label>
+          <input value={description} onChange={e => setDesc(e.target.value)} placeholder="Optional" style={inputStyle} onFocus={focusAccent} onBlur={blurBorder} />
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:12, alignItems:'flex-end' }}>
+          <div>
+            <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Visibility</label>
+            <select value={visibility} onChange={e => setVis(e.target.value)} style={{ ...inputStyle, cursor:'pointer' }}>
+              <option value="private">Private (granted users only)</option>
+              <option value="public">Public (any signed-in user)</option>
+            </select>
+          </div>
+          <button onClick={handleCreate} disabled={creating || !bucketName.trim() || !title.trim()} style={{ ...btnPrimary, opacity: creating || !bucketName.trim() || !title.trim() ? .6 : 1 }}>
+            {creating ? <Spinner size={14} color="#0d1117" /> : <Icon name="plus" size={14} />} Create
+          </button>
+        </div>
+      </div>
+
+      <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, overflow:'hidden' }}>
+        {loading ? <div style={{ padding:32, display:'flex', justifyContent:'center' }}><Spinner /></div>
+          : list.length === 0 ? <div style={{ padding:'40px 24px', textAlign:'center', color:'var(--fg3)', fontSize:13 }}>No datasets yet.</div>
+          : list.map((d, idx) => (
+            <div key={d.bucketName} style={{ padding:'14px 20px', borderBottom: idx<list.length-1 ? '1px solid var(--border)' : 'none', display:'grid', gridTemplateColumns:'1fr auto auto', gap:16, alignItems:'center' }}>
+              <div>
+                <div style={{ fontSize:14, fontWeight:500 }}>{d.title}</div>
+                <div style={{ fontSize:12, color:'var(--fg3)', fontFamily:'var(--mono)', marginTop:2 }}>{d.bucketName} · {d.pgDatabase} · owner: {d.ownerEmail}</div>
+                {d.description && <div style={{ fontSize:12, color:'var(--fg2)', marginTop:4 }}>{d.description}</div>}
+              </div>
+              <button onClick={() => handleToggleVis(d)} title="Click to toggle"
+                style={{ padding:'4px 12px', borderRadius:14, fontSize:11, fontWeight:600, letterSpacing:'.04em', textTransform:'uppercase', cursor:'pointer', border:`1px solid ${d.visibility === 'public' ? 'var(--accent-glow)' : 'var(--border)'}`, background: d.visibility === 'public' ? 'var(--accent-dim)' : 'transparent', color: d.visibility === 'public' ? 'var(--accent)' : 'var(--fg3)' }}>
+                {d.visibility}
+              </button>
+              <button onClick={() => handleDelete(d)} title="Delete dataset"
+                style={{ background:'transparent', border:'1px solid transparent', borderRadius:6, color:'var(--fg3)', cursor:'pointer', width:30, height:30, display:'flex', alignItems:'center', justifyContent:'center' }}
+                onMouseEnter={e => { e.currentTarget.style.background='var(--red-dim)'; e.currentTarget.style.borderColor='rgba(248,113,113,.25)'; e.currentTarget.style.color='var(--red)'; }}
+                onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.borderColor='transparent'; e.currentTarget.style.color='var(--fg3)'; }}>
+                <Icon name="trash" size={13} />
+              </button>
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── GroupsAdmin ── */
+function GroupsAdmin({ token }) {
+  const [list, setList]       = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [name, setName]       = useState('');
+  const [desc, setDesc]       = useState('');
+  const [creating, setCreating] = useState(false);
+  const [expanded, setExpanded] = useState({});         // groupName -> bool
+  const [memberInputs, setInputs] = useState({});       // groupName -> email being typed
+
+  const authFetch = useCallback((url, opts={}) =>
+    fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${token}` } }), [token]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const res = await authFetch('/api/groups');
+    if (res.ok) setList(await res.json());
+    setLoading(false);
+  }, [authFetch]);
+  useEffect(() => { load(); }, [load]);
+
+  const handleCreate = async () => {
+    if (!name.trim()) return;
+    setCreating(true);
+    try {
+      const res = await authFetch('/api/groups', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name: name.trim(), description: desc.trim() || null })
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || `HTTP ${res.status}`); }
+      setName(''); setDesc('');
+      await load();
+    } catch (e) { alert('Error: ' + e.message); }
+    finally { setCreating(false); }
+  };
+
+  const handleDelete = async (g) => {
+    if (!window.confirm(`Delete group "${g.name}"? Members are removed; existing dataset grants of type=group referencing this name become dangling.`)) return;
+    await authFetch(`/api/groups/${encodeURIComponent(g.name)}`, { method:'DELETE' });
+    await load();
+  };
+
+  const handleAddMember = async (groupName) => {
+    const email = (memberInputs[groupName] || '').trim();
+    if (!email) return;
+    const res = await authFetch(`/api/groups/${encodeURIComponent(groupName)}/members`, {
+      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email })
+    });
+    if (!res.ok) { const e = await res.json().catch(() => ({})); alert('Error: ' + (e.message || `HTTP ${res.status}`)); return; }
+    setInputs(prev => ({ ...prev, [groupName]: '' }));
+    await load();
+  };
+
+  const handleRemoveMember = async (groupName, email) => {
+    await authFetch(`/api/groups/${encodeURIComponent(groupName)}/members`, {
+      method:'DELETE', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email })
+    });
+    await load();
+  };
+
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+      <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, padding:24 }}>
+        <div style={{ fontSize:13, fontWeight:600, marginBottom:16 }}>Create Group</div>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr auto', gap:12, alignItems:'flex-end' }}>
+          <div>
+            <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Name</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="dd2476-vt26" style={{ ...inputStyle, fontFamily:'var(--mono)' }} onFocus={focusAccent} onBlur={blurBorder} />
+          </div>
+          <div>
+            <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Description</label>
+            <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Optional" style={inputStyle} onFocus={focusAccent} onBlur={blurBorder} />
+          </div>
+          <button onClick={handleCreate} disabled={creating || !name.trim()} style={{ ...btnPrimary, opacity: creating || !name.trim() ? .6 : 1 }}>
+            {creating ? <Spinner size={14} color="#0d1117" /> : <Icon name="plus" size={14} />} Create
+          </button>
+        </div>
+      </div>
+
+      <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, overflow:'hidden' }}>
+        {loading ? <div style={{ padding:32, display:'flex', justifyContent:'center' }}><Spinner /></div>
+          : list.length === 0 ? <div style={{ padding:'40px 24px', textAlign:'center', color:'var(--fg3)', fontSize:13 }}>No groups yet.</div>
+          : list.map((g, idx) => (
+            <div key={g.name} style={{ borderBottom: idx<list.length-1 ? '1px solid var(--border)' : 'none' }}>
+              <div style={{ padding:'14px 20px', display:'grid', gridTemplateColumns:'1fr auto auto', gap:16, alignItems:'center' }}>
+                <div onClick={() => setExpanded(p => ({ ...p, [g.name]: !p[g.name] }))} style={{ cursor:'pointer' }}>
+                  <div style={{ fontSize:14, fontWeight:500, fontFamily:'var(--mono)' }}>{g.name}</div>
+                  <div style={{ fontSize:12, color:'var(--fg3)', marginTop:2 }}>{g.members.length} member{g.members.length === 1 ? '' : 's'} · created by {g.createdBy}</div>
+                  {g.description && <div style={{ fontSize:12, color:'var(--fg2)', marginTop:4 }}>{g.description}</div>}
+                </div>
+                <button onClick={() => setExpanded(p => ({ ...p, [g.name]: !p[g.name] }))} style={{ ...btnSecondary, padding:'6px 12px', fontSize:12 }}>
+                  {expanded[g.name] ? 'Collapse' : 'Manage'}
+                </button>
+                <button onClick={() => handleDelete(g)} title="Delete group"
+                  style={{ background:'transparent', border:'1px solid transparent', borderRadius:6, color:'var(--fg3)', cursor:'pointer', width:30, height:30, display:'flex', alignItems:'center', justifyContent:'center' }}
+                  onMouseEnter={e => { e.currentTarget.style.background='var(--red-dim)'; e.currentTarget.style.borderColor='rgba(248,113,113,.25)'; e.currentTarget.style.color='var(--red)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.borderColor='transparent'; e.currentTarget.style.color='var(--fg3)'; }}>
+                  <Icon name="trash" size={13} />
+                </button>
+              </div>
+              {expanded[g.name] && (
+                <div style={{ padding:'0 20px 20px', background:'rgba(255,255,255,.012)' }}>
+                  <div style={{ display:'flex', gap:8, marginBottom:12 }}>
+                    <input value={memberInputs[g.name] || ''} onChange={e => setInputs(p => ({ ...p, [g.name]: e.target.value }))}
+                      placeholder="email@kth.se" style={{ ...inputStyle, flex:1 }} onFocus={focusAccent} onBlur={blurBorder}
+                      onKeyDown={e => e.key === 'Enter' && handleAddMember(g.name)} />
+                    <button onClick={() => handleAddMember(g.name)} style={btnPrimary}><Icon name="plus" size={13} /> Add</button>
+                  </div>
+                  {g.members.length === 0 ? <div style={{ fontSize:12, color:'var(--fg3)' }}>No members yet.</div>
+                  : <div style={{ display:'flex', flexWrap:'wrap', gap:6 }}>
+                      {g.members.map(email => (
+                        <div key={email} style={{ display:'flex', alignItems:'center', gap:6, background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:8, padding:'4px 10px', fontSize:12, fontFamily:'var(--mono)' }}>
+                          {email}
+                          <button onClick={() => handleRemoveMember(g.name, email)} title="Remove"
+                            style={{ background:'transparent', border:'none', color:'var(--fg3)', cursor:'pointer', display:'flex', padding:0 }}
+                            onMouseEnter={e => e.currentTarget.style.color='var(--red)'}
+                            onMouseLeave={e => e.currentTarget.style.color='var(--fg3)'}>
+                            <Icon name="close" size={11} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  }
+                </div>
+              )}
+            </div>
+          ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── GrantsAdmin ── */
+function GrantsAdmin({ token }) {
+  const [grants, setGrants]   = useState([]);
+  const [datasets, setDS]     = useState([]);
+  const [groups, setGroups]   = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [type, setType]       = useState('user');                  // 'user' | 'group' | 'everyone'
+  const [principalId, setPid] = useState('');
+  const [bucketName, setBN]   = useState('');
+  const [granting, setGranting] = useState(false);
+
+  const authFetch = useCallback((url, opts={}) =>
+    fetch(url, { ...opts, headers: { ...opts.headers, Authorization: `Bearer ${token}` } }), [token]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [gRes, dRes, grRes] = await Promise.all([
+      authFetch('/api/admin/grants'),
+      authFetch('/api/datasets'),
+      authFetch('/api/groups'),
+    ]);
+    if (gRes.ok)  setGrants(await gRes.json());
+    if (dRes.ok)  setDS(await dRes.json());
+    if (grRes.ok) setGroups(await grRes.json());
+    setLoading(false);
+  }, [authFetch]);
+  useEffect(() => { load(); }, [load]);
 
   const handleGrant = async () => {
-    if (!gEmail.trim() || !gBucketName) return;
+    if (!bucketName) return;
+    if (type !== 'everyone' && !principalId.trim()) return;
     setGranting(true);
     try {
-      await authFetch('/api/admin/grants', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ studentEmail: gEmail.trim(), bucketName: gBucketName }) });
-      setGEmail(''); setGBucketName('');
-      await loadGrants(search);
+      const body = type === 'everyone'
+        ? { principalType: 'everyone', bucketName }
+        : { principalType: type, principalId: principalId.trim(), bucketName };
+      const res = await authFetch('/api/admin/grants', {
+        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || `HTTP ${res.status}`); }
+      setPid(''); setBN('');
+      await load();
     } catch (e) { alert('Error: ' + e.message); }
     finally { setGranting(false); }
   };
 
-  const handleRevoke = async (studentEmail, bucketName) => {
-    if (!window.confirm(`Revoke access for ${studentEmail}?`)) return;
-    await authFetch('/api/admin/grants', { method:'DELETE', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ studentEmail, bucketName }) });
-    await loadGrants(search);
+  const handleRevoke = async (g) => {
+    const label = g.principalType === 'everyone' ? '@everyone' : `${g.principalType}:${g.principalId}`;
+    if (!window.confirm(`Revoke ${label} on ${g.bucketName}?`)) return;
+    await authFetch('/api/admin/grants', {
+      method:'DELETE', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ principalType: g.principalType, principalId: g.principalId, bucketName: g.bucketName })
+    });
+    await load();
   };
 
-  const grouped = grants.reduce((acc, g) => { if (!acc[g.studentEmail]) acc[g.studentEmail] = []; acc[g.studentEmail].push(g); return acc; }, {});
-  const tabStyle = active => ({ padding:'7px 16px', borderRadius:6, fontSize:13, fontWeight: active ? 500 : 400, color: active ? 'var(--fg)' : 'var(--fg2)', background: active ? 'var(--surface2)' : 'transparent', border:'none', cursor:'pointer', fontFamily:'var(--sans)', display:'flex', alignItems:'center', gap:6 });
+  // group grants by bucket so admins see "who has access to dataset X"
+  const byBucket = grants.reduce((acc, g) => { (acc[g.bucketName] = acc[g.bucketName] || []).push(g); return acc; }, {});
+  const radioStyle = active => ({ flex:1, padding:'9px 12px', borderRadius:7, fontSize:13, fontWeight: active ? 600 : 400, cursor:'pointer', border:`1px solid ${active ? 'var(--accent)' : 'var(--border)'}`, background: active ? 'var(--accent-dim)' : 'transparent', color: active ? 'var(--accent)' : 'var(--fg2)', textAlign:'center', fontFamily:'var(--sans)' });
 
   return (
-    <div>
-      <h1 style={{ fontSize:20, fontWeight:600, marginBottom:24 }}>Admin</h1>
-
-      <div style={{ display:'flex', gap:4, marginBottom:28, background:'var(--surface)', borderRadius:8, padding:4, width:'fit-content', border:'1px solid var(--border)' }}>
-        <button style={tabStyle(tab==='buckets')} onClick={() => setTab('buckets')}><Icon name="bucket" size={14} /> Buckets</button>
-        <button style={tabStyle(tab==='grants')}  onClick={() => setTab('grants')}><Icon name="users" size={14} /> Grants</button>
+    <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+      <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, padding:24 }}>
+        <div style={{ fontSize:13, fontWeight:600, marginBottom:16 }}>Grant Dataset Access</div>
+        <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+          <button onClick={() => { setType('user'); setPid(''); }}     style={radioStyle(type==='user')}>User (email)</button>
+          <button onClick={() => { setType('group'); setPid(''); }}    style={radioStyle(type==='group')}>Group</button>
+          <button onClick={() => { setType('everyone'); setPid(''); }} style={radioStyle(type==='everyone')}>@everyone</button>
+        </div>
+        <div style={{ display:'grid', gridTemplateColumns: type === 'everyone' ? '1fr auto' : '1fr 1fr auto', gap:12, alignItems:'flex-end' }}>
+          {type === 'user' && (
+            <div>
+              <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Email</label>
+              <input value={principalId} onChange={e => setPid(e.target.value)} placeholder="student@kth.se" style={inputStyle} onFocus={focusAccent} onBlur={blurBorder} />
+            </div>
+          )}
+          {type === 'group' && (
+            <div>
+              <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Group</label>
+              <select value={principalId} onChange={e => setPid(e.target.value)} style={{ ...inputStyle, cursor:'pointer' }}>
+                <option value="">Select group…</option>
+                {groups.map(g => <option key={g.name} value={g.name}>{g.name} ({g.members.length})</option>)}
+              </select>
+            </div>
+          )}
+          <div>
+            <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Dataset</label>
+            <select value={bucketName} onChange={e => setBN(e.target.value)} style={{ ...inputStyle, cursor:'pointer' }}>
+              <option value="">Select dataset…</option>
+              {datasets.map(d => <option key={d.bucketName} value={d.bucketName}>{d.title} ({d.bucketName})</option>)}
+            </select>
+          </div>
+          <button onClick={handleGrant} disabled={granting || !bucketName || (type !== 'everyone' && !principalId.trim())}
+            style={{ ...btnPrimary, opacity: granting || !bucketName || (type !== 'everyone' && !principalId.trim()) ? .6 : 1 }}>
+            {granting ? <Spinner size={14} color="#0d1117" /> : <Icon name="plus" size={14} />} Grant
+          </button>
+        </div>
       </div>
 
-      {tab === 'buckets' && (
-        <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
-          <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, padding:24 }}>
-            <div style={{ fontSize:13, fontWeight:600, marginBottom:16 }}>Add Bucket to Catalog</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:12, alignItems:'flex-end' }}>
-              <div>
-                <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Bucket Name</label>
-                <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="ducklake-ml" style={{ ...inputStyle, fontFamily:'var(--mono)' }} onFocus={focusAccent} onBlur={blurBorder} onKeyDown={e => e.key==='Enter' && handleAddBucket()} />
+      <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, padding:24 }}>
+        {loading ? <div style={{ display:'flex', justifyContent:'center', padding:32 }}><Spinner /></div>
+          : Object.keys(byBucket).length === 0 ? <div style={{ textAlign:'center', color:'var(--fg3)', fontSize:13, padding:'24px 0' }}>No grants yet.</div>
+          : Object.entries(byBucket).sort(([a],[b]) => a.localeCompare(b)).map(([bn, gs]) => (
+            <div key={bn} style={{ marginBottom:18 }}>
+              <div style={{ fontSize:12, fontWeight:600, color:'var(--fg2)', marginBottom:8, fontFamily:'var(--mono)', display:'flex', alignItems:'center', gap:6 }}>
+                <Icon name="bucket" size={13} /> {bn}
               </div>
-              <button onClick={handleAddBucket} disabled={adding || !newName.trim()} style={{ ...btnPrimary, opacity: adding || !newName.trim() ? .6 : 1 }}>
-                {adding ? <Spinner size={14} color="#0d1117" /> : <Icon name="plus" size={14} />} Create in Garage
-              </button>
-            </div>
-          </div>
-
-          <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, overflow:'hidden' }}>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 44px', padding:'11px 20px', borderBottom:'1px solid var(--border)', background:'rgba(255,255,255,.02)', gap:12 }}>
-              <span style={{ fontSize:11, fontWeight:600, color:'var(--fg3)', letterSpacing:'.08em', textTransform:'uppercase' }}>Name</span>
-              <span />
-            </div>
-            {bLoading ? <div style={{ padding:32, display:'flex', justifyContent:'center' }}><Spinner /></div>
-              : buckets.length === 0 ? <div style={{ padding:'40px 24px', textAlign:'center', color:'var(--fg3)', fontSize:13 }}>No buckets in Garage yet.</div>
-              : buckets.map((b, idx) => (
-                <div key={b.name} style={{ display:'grid', gridTemplateColumns:'1fr 44px', padding:'13px 20px', borderBottom: idx<buckets.length-1 ? '1px solid var(--border)' : 'none', background: idx%2===0 ? 'transparent' : 'rgba(255,255,255,.012)', gap:12, alignItems:'center' }}>
-                  <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-                    <div style={{ color:'var(--accent)' }}><Icon name="bucket" size={14} /></div>
-                    <span style={{ fontFamily:'var(--mono)', fontSize:13, fontWeight:500 }}>{b.name}</span>
-                  </div>
-                  <div style={{ display:'flex', justifyContent:'flex-end' }}>
-                    <button onClick={() => handleDeleteBucket(b.name)} title="Delete bucket permanently"
-                      style={{ background:'transparent', border:'1px solid transparent', borderRadius:6, color:'var(--fg3)', cursor:'pointer', width:30, height:30, display:'flex', alignItems:'center', justifyContent:'center' }}
-                      onMouseEnter={e => { e.currentTarget.style.background='var(--red-dim)'; e.currentTarget.style.borderColor='rgba(248,113,113,.25)'; e.currentTarget.style.color='var(--red)'; }}
-                      onMouseLeave={e => { e.currentTarget.style.background='transparent'; e.currentTarget.style.borderColor='transparent'; e.currentTarget.style.color='var(--fg3)'; }}>
-                      <Icon name="trash" size={13} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
-
-      {tab === 'grants' && (
-        <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
-          <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, padding:24 }}>
-            <div style={{ fontSize:13, fontWeight:600, marginBottom:16 }}>Grant Bucket Access</div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr auto', gap:12, alignItems:'flex-end' }}>
-              <div>
-                <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Student Email</label>
-                <input value={gEmail} onChange={e => setGEmail(e.target.value)} placeholder="student1@kth.se" style={inputStyle} onFocus={focusAccent} onBlur={blurBorder} />
+              <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
+                {gs.map((g, i) => {
+                  const isEveryone = g.principalType === 'everyone';
+                  const isGroup    = g.principalType === 'group';
+                  const accent     = isEveryone ? 'var(--yellow)' : isGroup ? 'var(--accent)' : 'var(--fg2)';
+                  const label      = isEveryone ? '@everyone' : `${g.principalType}: ${g.principalId}`;
+                  return (
+                    <div key={i} style={{ display:'flex', alignItems:'center', gap:8, background:'var(--surface2)', border:`1px solid ${isEveryone ? 'rgba(251,191,36,.3)' : isGroup ? 'var(--accent-glow)' : 'var(--border)'}`, borderRadius:8, padding:'6px 12px' }}>
+                      <span style={{ fontFamily:'var(--mono)', fontSize:12, color: accent }}>{label}</span>
+                      <button onClick={() => handleRevoke(g)} title="Revoke"
+                        style={{ background:'transparent', border:'none', color:'var(--fg3)', cursor:'pointer', display:'flex', padding:0 }}
+                        onMouseEnter={e => e.currentTarget.style.color='var(--red)'}
+                        onMouseLeave={e => e.currentTarget.style.color='var(--fg3)'}>
+                        <Icon name="close" size={12} />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
-              <div>
-                <label style={{ display:'block', fontSize:12, fontWeight:500, color:'var(--fg2)', marginBottom:6 }}>Bucket</label>
-                <select value={gBucketName} onChange={e => setGBucketName(e.target.value)} style={{ ...inputStyle, cursor:'pointer' }}>
-                  <option value="">Select bucket…</option>
-                  {buckets.map(b => <option key={b.name} value={b.name}>{b.name}</option>)}
-                </select>
-              </div>
-              <button onClick={handleGrant} disabled={granting || !gEmail.trim() || !gBucketName} style={{ ...btnPrimary, opacity: granting || !gEmail.trim() || !gBucketName ? .6 : 1 }}>
-                {granting ? <Spinner size={14} color="#0d1117" /> : <Icon name="plus" size={14} />} Grant
-              </button>
             </div>
-          </div>
-
-          <div style={{ background:'var(--surface)', border:'1px solid var(--border)', borderRadius:14, padding:24 }}>
-            <div style={{ display:'flex', gap:12, marginBottom:20 }}>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Filter by email…" style={{ ...inputStyle, flex:1 }} onFocus={focusAccent} onBlur={blurBorder} onKeyDown={e => e.key==='Enter' && loadGrants(search)} />
-              <button onClick={() => loadGrants(search)} style={btnSecondary}><Icon name="refresh" size={14} /> Search</button>
-            </div>
-            {gLoading ? <div style={{ display:'flex', justifyContent:'center', padding:32 }}><Spinner /></div>
-              : Object.keys(grouped).length === 0 ? <div style={{ textAlign:'center', color:'var(--fg3)', fontSize:13, padding:'24px 0' }}>No grants found.</div>
-              : Object.entries(grouped).map(([email, gs]) => (
-                <div key={email} style={{ marginBottom:16 }}>
-                  <div style={{ fontSize:12, fontWeight:600, color:'var(--fg2)', marginBottom:8, fontFamily:'var(--mono)' }}>{email}</div>
-                  <div style={{ display:'flex', flexWrap:'wrap', gap:8 }}>
-                    {gs.map(g => (
-                      <div key={g.bucketName} style={{ display:'flex', alignItems:'center', gap:8, background:'var(--surface2)', border:'1px solid var(--border)', borderRadius:8, padding:'6px 12px' }}>
-                        <Icon name="bucket" size={13} />
-                        <span style={{ fontFamily:'var(--mono)', fontSize:12 }}>{g.bucketName}</span>
-                        <button onClick={() => handleRevoke(email, g.bucketName)} title="Revoke"
-                          style={{ background:'transparent', border:'none', color:'var(--fg3)', cursor:'pointer', display:'flex', padding:0 }}
-                          onMouseEnter={e => e.currentTarget.style.color='var(--red)'}
-                          onMouseLeave={e => e.currentTarget.style.color='var(--fg3)'}>
-                          <Icon name="close" size={12} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ))}
-          </div>
-        </div>
-      )}
+          ))}
+      </div>
     </div>
   );
 }
