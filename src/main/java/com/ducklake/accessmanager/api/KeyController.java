@@ -9,7 +9,7 @@ import com.ducklake.accessmanager.model.KeyRequest;
 import com.ducklake.accessmanager.service.DatabaseAccessTokenManager;
 import com.ducklake.accessmanager.service.KeyMappingService;
 import com.ducklake.accessmanager.service.ObjectStoreAccessTokenManager;
-import com.ducklake.accessmanager.service.impl.GrantService;
+import com.ducklake.accessmanager.service.impl.AccessService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -45,20 +45,20 @@ public class KeyController {
     private final ObjectStoreAccessTokenManager objectStore;
     private final DatabaseAccessTokenManager database;
     private final KeyMappingService keyMapping;
-    private final GrantService grantService;
+    private final AccessService accessService;
     private final String postgresPublicHost;
 
     public KeyController(
         ObjectStoreAccessTokenManager objectStore,
         DatabaseAccessTokenManager database,
         KeyMappingService keyMapping,
-        GrantService grantService,
+        AccessService accessService,
         @Value("${ducklake.postgres.public-host}") String postgresPublicHost
     ) {
         this.objectStore = objectStore;
         this.database = database;
         this.keyMapping = keyMapping;
-        this.grantService = grantService;
+        this.accessService = accessService;
         this.postgresPublicHost = postgresPublicHost;
     }
 
@@ -86,7 +86,8 @@ public class KeyController {
             return ResponseEntity.status(403).build();
         }
 
-        if (!admin && !grantService.hasGrant(displayName, request.bucketName())) {
+        // hasAccess covers direct user grants, group memberships, and @everyone
+        if (!admin && !accessService.hasAccess(displayName, request.bucketName())) {
             return ResponseEntity.status(403).build();
         }
 

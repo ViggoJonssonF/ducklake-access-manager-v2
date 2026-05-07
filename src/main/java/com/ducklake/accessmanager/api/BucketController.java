@@ -3,7 +3,7 @@ package com.ducklake.accessmanager.api;
 import com.ducklake.accessmanager.config.SecurityConfig;
 import com.ducklake.accessmanager.model.Bucket;
 import com.ducklake.accessmanager.service.ObjectStoreAccessTokenManager;
-import com.ducklake.accessmanager.service.impl.GrantService;
+import com.ducklake.accessmanager.service.impl.AccessService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -19,17 +19,18 @@ import java.util.Set;
 public class BucketController {
 
     private final ObjectStoreAccessTokenManager objectStore;
-    private final GrantService grantService;
+    private final AccessService accessService;
 
-    public BucketController(ObjectStoreAccessTokenManager objectStore, GrantService grantService) {
+    public BucketController(ObjectStoreAccessTokenManager objectStore, AccessService accessService) {
         this.objectStore = objectStore;
-        this.grantService = grantService;
+        this.accessService = accessService;
     }
 
     /**
      * Returns buckets visible to the caller:
-     * - Admin: all Garage buckets
-     * - Student: only buckets they have been granted access to
+     * - Admin: all Garage buckets.
+     * - Everyone else: union of direct user grants, group-membership grants,
+     *   and any @everyone grants. Computed by AccessService.visibleBucketNames.
      */
     @GetMapping
     public ResponseEntity<List<Bucket>> list(@AuthenticationPrincipal Jwt jwt) {
@@ -38,10 +39,10 @@ public class BucketController {
         }
         String email = jwt.getClaimAsString("email");
         if (email == null) email = jwt.getClaimAsString("preferred_username");
-        Set<String> granted = Set.copyOf(grantService.grantedBucketNames(email));
-        List<Bucket> visible = objectStore.listBuckets().stream()
-            .filter(b -> granted.contains(b.name()))
+        Set<String> visible = accessService.visibleBucketNames(email);
+        List<Bucket> filtered = objectStore.listBuckets().stream()
+            .filter(b -> visible.contains(b.name()))
             .toList();
-        return ResponseEntity.ok(visible);
+        return ResponseEntity.ok(filtered);
     }
 }
