@@ -23,6 +23,7 @@ public class SecurityConfig {
                 .requestMatchers("/healthz", "/", "/index.html", "/favicon.ico").permitAll()
                 .requestMatchers("/api/admin/**").authenticated()
                 .requestMatchers("/api/buckets").authenticated()
+                .requestMatchers("/api/datasets/**").authenticated()
                 .requestMatchers(HttpMethod.GET, "/api/keys").authenticated()
                 .requestMatchers(HttpMethod.POST, "/api/keys/generate").authenticated()
                 .requestMatchers(HttpMethod.DELETE, "/api/keys/**").authenticated()
